@@ -1,14 +1,3 @@
-/**
- * quic-link relay — Cloudflare Workers + Durable Objects implementation.
- *
- * One Durable Object instance per service id. Each DO holds the WebSocket
- * connections of registered servers and brokers the tunnel request/response
- * handshake between clients and servers.
- *
- * Only the signalling traffic (HTTP + WebSocket) touches Cloudflare; the
- * QUIC data plane stays direct between client and server.
- */
-
 const TYPE_SERVICE_REQUEST = 0;
 const TYPE_TUNNEL_READY = 1;
 const TYPE_TUNNEL_REQUEST = 2;
@@ -23,15 +12,8 @@ export class RelayDO {
 
   async fetch(request) {
     const url = new URL(request.url);
-
-    if (request.headers.get("Upgrade") === "websocket") {
-      return this.handleServerUpgrade();
-    }
-
-    if (url.pathname === "/client") {
-      return this.handleClient(request);
-    }
-
+    if (request.headers.get("Upgrade") === "websocket") return this.handleServerUpgrade();
+    if (url.pathname === "/client") return this.handleClient(request);
     return new Response("not found", { status: 404 });
   }
 
@@ -45,22 +27,15 @@ export class RelayDO {
   async webSocketMessage(ws, message) {
     const text = typeof message === "string" ? message : new TextDecoder().decode(message);
     let msg;
-    try {
-      msg = JSON.parse(text);
-    } catch {
-      return;
-    }
+    try { msg = JSON.parse(text); } catch { return; }
 
     if (msg.type === TYPE_SERVICE_REQUEST) {
-      const fingerprint = msg.value?.server_fingerprint ?? "";
-      ws.serializeAttachment({ fingerprint, busy: false });
+      ws.serializeAttachment({ fingerprint: msg.value?.server_fingerprint ?? "", busy: false });
     } else if (msg.type === TYPE_TUNNEL_READY) {
-      const address = msg.value?.address ?? "";
-      const addresses = msg.value?.addresses ?? [];
       const p = this.pending.get(ws);
       if (p) {
         this.pending.delete(ws);
-        p.resolve({ address, addresses });
+        p.resolve({ address: msg.value?.address ?? "", addresses: msg.value?.addresses ?? [] });
       }
     }
   }
@@ -73,21 +48,13 @@ export class RelayDO {
     }
   }
 
-  webSocketError(ws) {
-    this.webSocketClose(ws);
-  }
+  webSocketError(ws) { this.webSocketClose(ws); }
 
   async handleClient(request) {
     let msg;
-    try {
-      msg = await request.json();
-    } catch {
-      return new Response("bad request", { status: 400 });
-    }
+    try { msg = await request.json(); } catch { return new Response("bad request", { status: 400 }); }
 
-    if (msg.type !== TYPE_TUNNEL_REQUEST) {
-      return new Response("invalid message type", { status: 400 });
-    }
+    if (msg.type !== TYPE_TUNNEL_REQUEST) return new Response("invalid message type", { status: 400 });
 
     const id = msg.value?.id ?? "";
     const clientAddress = msg.value?.client_address ?? "";
@@ -112,24 +79,18 @@ export class RelayDO {
       }
     }
 
-    if (!chosen) {
-      return new Response("no available service", { status: 404 });
-    }
+    if (!chosen) return new Response("no available service", { status: 404 });
 
     const ws = chosen;
     try {
-      ws.send(
-        JSON.stringify({
-          type: TYPE_START_TUNNEL,
-          value: {
-            peer_address: clientAddress,
-            ...(Array.isArray(clientAddresses) && clientAddresses.length > 0
-              ? { peer_addresses: clientAddresses }
-              : {}),
-            ...(clientFingerprint ? { peer_fingerprint: clientFingerprint } : {}),
-          },
-        }),
-      );
+      ws.send(JSON.stringify({
+        type: TYPE_START_TUNNEL,
+        value: {
+          peer_address: clientAddress,
+          ...(Array.isArray(clientAddresses) && clientAddresses.length > 0 ? { peer_addresses: clientAddresses } : {}),
+          ...(clientFingerprint ? { peer_fingerprint: clientFingerprint } : {}),
+        },
+      }));
 
       const ready = await this.waitForReady(ws, 30_000);
 
@@ -138,9 +99,7 @@ export class RelayDO {
           type: TYPE_START_TUNNEL,
           value: {
             peer_address: ready.address,
-            ...(Array.isArray(ready.addresses) && ready.addresses.length > 0
-              ? { peer_addresses: ready.addresses }
-              : {}),
+            ...(Array.isArray(ready.addresses) && ready.addresses.length > 0 ? { peer_addresses: ready.addresses } : {}),
             ...(chosenFingerprint ? { peer_fingerprint: chosenFingerprint } : {}),
           },
         }),
@@ -165,14 +124,8 @@ export class RelayDO {
         reject(new Error("timeout waiting for server"));
       }, timeoutMs);
       this.pending.set(ws, {
-        resolve: (addr) => {
-          clearTimeout(timer);
-          resolve(addr);
-        },
-        reject: (err) => {
-          clearTimeout(timer);
-          reject(err);
-        },
+        resolve: (addr) => { clearTimeout(timer); resolve(addr); },
+        reject: (err) => { clearTimeout(timer); reject(err); },
       });
     });
   }
@@ -180,9 +133,7 @@ export class RelayDO {
 
 function authorize(request, expected) {
   const header = request.headers.get("Authorization") ?? "";
-  if (header !== "" && !header.startsWith("Token ")) {
-    return false;
-  }
+  if (header !== "" && !header.startsWith("Token ")) return false;
   const token = header.startsWith("Token ") ? header.slice("Token ".length) : "";
   return constantTimeEqual(token, expected);
 }
@@ -198,39 +149,34 @@ function constantTimeEqual(a, b) {
 
 export default {
   async fetch(request, env) {
+    // ====== TOKEN FORZADO AQUÍ PARA QUE FUNCIONE SÍ O SÍ ======
+    const AUTH_TOKEN = env.AUTH_TOKEN || "UDPGuard_UDP";
+    // ===========================================================
+
     const url = new URL(request.url);
 
-    if (!authorize(request, env.AUTH_TOKEN ?? "")) {
+    if (!authorize(request, AUTH_TOKEN)) {
       return new Response("unauthorized", { status: 401 });
     }
 
     if (url.pathname === "/client") {
       const bodyText = await request.text();
       let parsed;
-      try {
-        parsed = JSON.parse(bodyText);
-      } catch {
-        return new Response("bad request", { status: 400 });
-      }
+      try { parsed = JSON.parse(bodyText); } catch { return new Response("bad request", { status: 400 }); }
       const id = parsed?.value?.id ?? "";
-      if (!id) {
-        return new Response("missing id", { status: 400 });
-      }
+      if (!id) return new Response("missing id", { status: 400 });
+      
       const stub = env.RELAY.get(env.RELAY.idFromName(id));
-      return stub.fetch(
-        new Request(request.url, {
-          method: request.method,
-          headers: request.headers,
-          body: bodyText,
-        }),
-      );
+      return stub.fetch(new Request(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: bodyText,
+      }));
     }
 
     if (url.pathname.startsWith("/server/")) {
       const id = decodeURIComponent(url.pathname.slice("/server/".length));
-      if (!id) {
-        return new Response("bad request", { status: 400 });
-      }
+      if (!id) return new Response("bad request", { status: 400 });
       const stub = env.RELAY.get(env.RELAY.idFromName(id));
       return stub.fetch(request);
     }
