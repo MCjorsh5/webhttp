@@ -1,7 +1,7 @@
-const TYPE_SERVICE_REQUEST = 0;
-const TYPE_TUNNEL_READY = 1;
-const TYPE_TUNNEL_REQUEST = 2;
-const TYPE_START_TUNNEL = 3;
+const TYPE_SERVICE_REQUEST = "service_request";
+const TYPE_TUNNEL_READY = "tunnel_ready";
+const TYPE_TUNNEL_REQUEST = "tunnel_request";
+const TYPE_START_TUNNEL = "start_tunnel";
 
 export class RelayDO {
   constructor(state, env) {
