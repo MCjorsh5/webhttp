@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "quic-link-relay",
+  "name": "webhttp",
   "main": "src/index.js",
   "compatibility_date": "2024-11-01",
   "durable_objects": {
