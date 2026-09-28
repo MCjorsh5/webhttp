@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "quic-link-relay",
+  "main": "src/index.js",
+  "compatibility_date": "2024-11-01",
+  "durable_objects": {
+    "bindings": [{ "name": "RELAY", "class_name": "RelayDO" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RelayDO"] }
+  ],
+  "observability": { "enabled": true }
+}
